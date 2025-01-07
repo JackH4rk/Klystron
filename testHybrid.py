@@ -53,7 +53,7 @@ def Es(z, Q, a, b):
     return Q / (2 * np.pi * C.epsilon_0 * b ** 2) * arr.sum()
 
 
-# 总的空间电荷场 E_spch
+# 总的空间电荷场 E_spch (z,Espch_z)
 def E_spch(z, z_i, Q, a, b):
     E_spch_total = np.zeros_like(z)
     for z_pos in z_i:
@@ -63,12 +63,23 @@ def E_spch(z, z_i, Q, a, b):
 
 # 腔场 E_cav 计算
 def E_cav(t, z, z_i, Q_i=1e-9):
-    velocities = v_i(t)  # 更新速度
-    I_ind_t = np.sum(Q_i * velocities * f(z_i))  # 感应电流
+    velocities = v_i(t)
+    I_ind = np.sum(Q_i * velocities * f(z_i))  # 感应电流
     Z_cav = R_Q / (1 / Q_t + 1j * ((omega_0 ** 2 - omega_cav ** 2) / (omega_0 * omega_cav)))  # 腔阻抗
     abs_Z_cav = np.real(Z_cav)
-    Vtg = np.abs(I_ind_t) * abs_Z_cav  # 腔压
-    return Vtg * f(z)  # 腔场 E_cav
+    theta_Z_cav = np.imag(Z_cav)
+    # 感应电流的一次谐波I_ind_1
+    f1_t = np.array([I_ind(trange, z_i) * np.cos(omega_0 * trange) for trange in t])  # 离散取点
+    f2_t = np.array([I_ind(trange, z_i) * np.sin(omega_0 * trange) for trange in t])
+
+    F1 = 2 / T_0 * trapezoid(f1_t, [t], dx=0.01 * T_0)  # a1  # 离散求和代替连续积分数值求解方法
+    F2 = 2 / T_0 * trapezoid(f2_t, [t], dx=0.01 * T_0)  # b1
+
+    # 感应电流一次谐波的幅值与相位
+    abs_I_ind_1 = np.sqrt(F1 ** 2 + F2 ** 2)
+    theta_I_ind_1 = np.arctan2(-F2, F1)  # arctan2求解范围的定义域[-pi,pi]
+    Vtg = abs_I_ind_1 * abs_Z_cav  # 腔压
+    return Vtg * f(z) * np.cos(omega_0 * t + theta_I_ind_1 + theta_Z_cav)  # 腔场|E_cav|
 
 
 # 计算加速电场 Ez(t, z)
@@ -83,7 +94,7 @@ def run_simulation(z_min, z_max, t_steps, z_steps, Q, a, b, tolerance=1e-6, max_
     # 时间点
     t = np.linspace(0, T_0, t_steps)
 
-    # 初始条件
+    # 初始条件 (应当只设将进入谐振腔的电子圆盘)
     initial_conditions = np.array([[z0, 5.4e-23] for z0 in np.linspace(z_min, z_max, z_steps)])
 
     # 存储每次计算的腔压，用于收敛判断
@@ -92,7 +103,7 @@ def run_simulation(z_min, z_max, t_steps, z_steps, Q, a, b, tolerance=1e-6, max_
     cycle = 0
 
     while not converged and cycle < max_cycles:
-        # 使用 scipy.integrate 解算运动方程
+        # 运动方程
         sol = solve_ivp(
             lorentz, t_span=(t[0], t[-1]), y0=initial_conditions.flatten(),
             method='RK45', t_eval=t, args=(initial_conditions[:, 0], Q, a, b)  # 传入 z_i, Q, a, b
@@ -117,11 +128,11 @@ def run_simulation(z_min, z_max, t_steps, z_steps, Q, a, b, tolerance=1e-6, max_
         Ez_values = E_spch_values_interp + E_cav_values_interp
 
         # 计算腔压 Vtg
-        Vtg = np.sum(E_cav_values_interp)  # 假设腔压是腔场的总和，实际中可能需修改
+        Vtg = np.sum(E_cav_values_interp)
 
         # 判断收敛：检查腔压的变化是否小于容差
         if Vtg_prev is not None:
-            Vtg_diff = np.abs(Vtg - Vtg_prev) / Vtg_prev
+            Vtg_diff = np.abs(Vtg - Vtg_prev) / np.abs(Vtg_prev)
             if Vtg_diff < tolerance:
                 converged = True
 
@@ -135,8 +146,8 @@ def run_simulation(z_min, z_max, t_steps, z_steps, Q, a, b, tolerance=1e-6, max_
 
 # 主程序执行
 z_min, z_max = -0.01, 0.01  # 位置范围 (m)
-t_steps = 500  # 时间步数
-z_steps = 70  # 位置步数
+t_steps = 50  # 时间步数
+z_steps = 36  # 位置步数
 Ez = run_simulation(z_min, z_max, t_steps, z_steps, Q, a, b)
 
 # 绘制结果
